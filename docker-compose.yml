@@ -1,0 +1,135 @@
+version: '3.3'
+services:
+  employee_app:
+    container_name: employee_app
+    build: .
+    ports:
+      - '8088:8088'
+    expose:
+      - '8088'
+    networks:
+      - employee_app_net
+    environment:
+      STAGE: 'DEV'
+      EM_MIGRATION_PATH: '/migrations'
+      DW_SERVICE_NAME: "main_service"
+      DW_DEBUG: "TRUE"
+      DW_SCHEMAS_PATH: '/schemas'
+      MASTER_CONNECTION_STRING: 'users:password@tcp(master_db:3306)/employee?charset=utf8mb4&parseTime=True&loc=Local'
+      SLAVE_CONNECTION_STRING: 'users:password@tcp(slave_db:3306)/employee?charset=utf8mb4&parseTime=True&loc=Local'
+      MAX_AGE: '3'
+      LOG_FILE_NAME: 'em_log'
+      MAX_BACKUP: '3'
+      MAX_LOG_FILE_SIZE: '500'
+      KEYCLOAK_ROOT_URL: "http://keycloak:8080"
+    volumes:
+      - ~/tungnt/local/golang/personal_project/employee_manager:/app
+    depends_on:
+      - master_db
+      - slave_db
+      - keycloak
+    command: ["./wait-for-it.sh", "master_db:3306", "slave_db:3306", "keycloak:8080", "-t", "240", "--", "go run /app/cmd/main_service/main.go"]
+
+  master_db:
+    container_name: employee_app_masterdb
+    image: mysql:5.7
+    restart: always
+    environment:
+      MYSQL_DATABASE: 'employee'
+      MYSQL_ROOT_PASSWORD: 'password'
+      MYSQL_USER: 'users'
+      MYSQL_PASSWORD: 'password'
+    ports:
+      - '13306:3306'
+    expose:
+      - '3306'
+    volumes:
+      - ~/mysql_docker/masterdb/data:/var/lib/mysql
+      - ~/mysql_docker/masterdb/my.cnf:/etc/my.cnf
+    networks:
+      - employee_app_net
+
+  slave_db:
+    container_name: employee_app_slavedb
+    image: mysql:5.7
+    restart: always
+    environment:
+      MYSQL_DATABASE: 'employee'
+      MYSQL_ROOT_PASSWORD: 'password'
+      MYSQL_USER: 'users'
+      MYSQL_PASSWORD: 'password'
+    ports:
+      - '13307:3306'
+    expose:
+      - '3306'
+    volumes:
+      - ~/mysql_docker/slavedb/data:/var/lib/mysql
+      - ~/mysql_docker/slavedb/my.cnf:/etc/my.cnf
+    networks:
+      - employee_app_net
+    depends_on:
+      - master_db
+
+  keycloak_mysql:
+    container_name: keycloak_mysql
+    image: mysql:5.7
+    volumes:
+      - keycloak_mysql:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: keycloak
+      MYSQL_USER: keycloak
+      MYSQL_PASSWORD: password
+    ports:
+      - '13308:3306'
+    networks:
+      - employee_app_net
+  keycloak:
+    container_name: keycloak
+    image: quay.io/keycloak/keycloak:legacy
+    environment:
+      DB_VENDOR: MYSQL
+      DB_ADDR: keycloak_mysql
+      DB_DATABASE: keycloak
+      DB_USER: keycloak
+      DB_PASSWORD: password
+      KEYCLOAK_USER: admin
+      KEYCLOAK_PASSWORD: password
+    ports:
+      - "8080:8080"
+    depends_on:
+      - keycloak_mysql
+    networks:
+      - employee_app_net
+
+  prometheus:
+    container_name: "prometheus"
+    image: prom/prometheus:v2.21.0
+    volumes: 
+      - ~/prometheus:/etc/prometheus
+    command: --web.enable-lifecycle  --config.file=/etc/prometheus/prometheus.yml
+    ports:
+      - 9090:9090
+    networks:
+      - employee_app_net
+
+  grafana:
+    container_name: "grafana"
+    image: grafana/grafana:7.4.5-ubuntu
+    volumes:
+      - ~/grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yaml
+    ports:
+      - 16000:3000
+    links:
+      - prometheus
+    networks:
+      - employee_app_net
+
+volumes:
+  masterdb:
+  slavedb:
+  keycloak_mysql:
+  prometheus-data:
+
+networks:
+  employee_app_net:
